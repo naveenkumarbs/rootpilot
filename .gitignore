@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+logs/
+
+# Local runtime data
+data/
+tmp/
+.cache/
+
+# OpenTelemetry Demo (third-party)
+opentelemetry-demo/
+
+# Docker runtime data
+volumes/
+opensearch-data/
+prometheus-data/
+grafana-data/
+
+# OS
+.DS_Store
+Thumbs.db
