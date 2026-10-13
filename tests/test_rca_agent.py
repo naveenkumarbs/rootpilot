@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from app.agents.rca_agent import RCAAgent
 
@@ -19,12 +20,27 @@ async def main():
         """
     )
 
-    print("\n===== RCA Result =====")
-    print("Status:", result["status"])
-    print("Iterations:", result["iterations"])
-    print("Tool calls:", result["tool_calls_executed"])
-    print("Duration:", result["duration_seconds"], "seconds")
+    print("\n===== EVIDENCE VALIDATION =====")
 
+    validation = result.get("validation")
+
+    assert validation is not None, (
+        "RCAAgent did not return validation metadata."
+    )
+
+    print(json.dumps(validation, indent=2))
+
+    assert validation["is_valid"] is True
+    assert validation["errors"] == []
+
+    if result.get("rca_report"):
+        print("\n===== STRUCTURED RCA REPORT =====")
+        print(
+            json.dumps(
+                result["rca_report"],
+                indent=2
+            )
+        )
     print("\nTool History:")
 
     for tool in result["tool_history"]:

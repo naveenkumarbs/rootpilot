@@ -1,6 +1,10 @@
 import uuid
+import json
 from google import genai
 from google.genai import types 
+
+from typing import Type, TypeVar
+from pydantic import BaseModel
 
 from app.config.settings import settings
 from app.llm.base import LLMProvider
@@ -10,6 +14,8 @@ from app.llm.models import (
     ToolCall,
     ToolDefinition
 )
+
+T = TypeVar("T", bound=BaseModel)
 
 class GeminiProvider (LLMProvider):
     def __init__(self):
@@ -285,4 +291,104 @@ class GeminiProvider (LLMProvider):
             )
         )
 
+    def generate_structured(
+        self,
+        messages: list,
+        response_model: Type[T],
+        max_output_tokens: int = 4096,
+    ) -> tuple[T, LLMResponse]:
+
+        system_instructions = []
+        conversation = []
+
+        for message in messages:
+            if message.role == "system":
+                system_instructions.append(message.content)
+            elif message.role == "user":
+                conversation.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(text=message.content)
+                        ],
+                    )
+                )
+            else:
+                raise ValueError(
+                    "Structured generation expects system and user "
+                    f"messages only; received role = {message.role!r}"
+                )
+
+        if not conversation:
+            raise ValueError(
+                "Structured generation requires at least one user message"
+            )
+
+        raw_schema = response_model.model_json_schema()
+        gemini_schema = sanitize_gemini_schema(raw_schema)
+
+        print(
+            "Original contains additionalProperties:",
+            "additionalProperties" in json.dumps(raw_schema)
+        )
+
+        print(
+            "Gemini schema contains additionalProperties:",
+            "additionalProperties" in json.dumps(gemini_schema)
+        )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=conversation,
+            config=types.GenerateContentConfig(
+                system_instruction="\n".join(system_instructions) or None,
+                response_mime_type="application/json",
+                response_schema=gemini_schema,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+
+        if not response.text:
+            raise ValueError(
+                "Gemini returned empty structured response"
+            )
+
+        parsed = response_model.model_validate_json(response.text)
+
+        usage = response.usage_metadata
+
+        metadata = LLMResponse(
+            text=response.text,
+            input_tokens=(
+                usage.prompt_token_count or 0
+            ) if usage else 0,
+            output_tokens=(
+                usage.candidates_token_count or 0
+            ) if usage else 0,
+            reasoning_tokens=(
+                usage.thoughts_token_count or 0
+            ) if usage else 0,
+        )
+
+        return parsed, metadata
+
     
+def sanitize_gemini_schema(schema):
+    """
+    Prepare a Pydantic JSON Schema for Gemini.
+    Remove only known incompatible fields.
+    Preserve the original Pydantic valdation model.
+    """
+
+    if isinstance(schema, dict):
+        return{
+            key: sanitize_gemini_schema(value) 
+            for key, value in schema.items()
+            if key != "additionalProperties"
+        }
+    if isinstance(schema, list):
+        return[
+            sanitize_gemini_schema(item)
+            for item in schema
+        ]
+    return schema

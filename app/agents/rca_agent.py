@@ -2,6 +2,7 @@ import json
 import asyncio
 import time
 import traceback
+from datetime import datetime, timezone
 
 from app.config.settings import settings
 from app.llm.factory import LLMProviderfactory
@@ -9,6 +10,10 @@ from app.llm.models import LLMMessage, ToolResult
 from app.tools.definitions import RCA_TOOLS
 from app.tools.registry import execute_tool
 from app.rca.evidence_store import EvidenceStore
+from app.rca.models import RCAAnalysis
+from app.rca.parser import build_rca_report
+from app.rca.validator import EvidenceValidator
+from app.rca.models import InvestigationStatus
 
 class RCAAgent:
     def __init__(self):
@@ -27,6 +32,7 @@ class RCAAgent:
 
     async def investigate(self, prompt: str):
         started_at = time.monotonic()
+        started_at_utc = datetime.now(timezone.utc)
         deadline = started_at + self.max_execution_seconds
 
         messages = [
@@ -108,6 +114,105 @@ class RCAAgent:
             total_output_tokens += response.output_tokens or 0
             total_reasoning_tokens += response.reasoning_tokens or 0
 
+        async def finalize_structured(completion_reason: str):
+            evidence_records = [
+                evidence.model_dump(mode="json")
+                for evidence in evidence_store.list_all()
+            ]
+
+            finalization_messages = [
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You are RootPilot, an evidence-grounded RCA analyst. "
+                        "Generate a structured RCA analysis. "
+                        "Use only the evidence provided. "
+                        "Every observation and confirmed finding must cite "
+                        "existing evidence IDs. "
+                        "Do not invent evidence IDs. "
+                        "Distinguish observed facts from hypotheses. "
+                        "If the underlying cause cannot be established, "
+                        "state that in the limitations. "
+                        "Do not recommend executing remediation automatically."
+                    ),
+                ),
+                LLMMessage(
+                    role="user",
+                    content=json.dumps(
+                        {
+                            "investigation_request": prompt,
+                            "evidence": evidence_records,
+                            "tool_history": tool_history,
+                            "instructions": (
+                                "Analyze te available evidence and generate "
+                                "an RCAAnalysis object."
+                            ),
+                        },
+                        default=str,
+                    ),
+                ),
+            ]
+
+            analysis, response = await run_with_deadline(
+                asyncio.to_thread(
+                    self.provider.generate_structured,
+                    finalization_messages,
+                    RCAAnalysis,
+                    4096,
+                )
+            )
+
+            record_usage(response)
+
+            # Validate evidence references
+            validation = EvidenceValidator().validate(
+                analysis=analysis,
+                evidence_store=evidence_store
+            )
+
+            if not validation.is_valid:
+                return build_result(
+                    "validation_failed",
+                    (
+                        "Structured RCA contains invalid evidence references: "
+                        +"; ".join(validation.errors)
+                    ),
+                    "evidence_validation_failed"
+                )
+
+            # Determine investigation status
+            investigation_status = (
+                InvestigationStatus.PARTIAL
+                if completion_reason == "iteration_limit"
+                else InvestigationStatus.COMPLETED
+            )
+
+            # Construct the trusted report
+            report = build_rca_report(
+                analysis=analysis,
+                evidence_store=evidence_store,
+                started_at=started_at_utc,
+                completion_reason=completion_reason,
+                status=investigation_status,
+            )
+
+            # Return the report and validation metadata
+            result = build_result(
+                status=investigation_status.value,
+                answer=report.title,
+                completion_reason=completion_reason,
+            )
+
+            result["rca_report"] = report.model_dump(mode="json")
+
+            result["validation"] = {
+                "is_valid": validation.is_valid,
+                "errors": validation.errors,
+                "warnings": validation.warnings
+            }
+
+            return result
+
 
         for iteration in range(1, self.max_iterations + 1):
             iterations = iteration
@@ -163,14 +268,29 @@ class RCAAgent:
 
             if not response.tool_calls:
                 if response.text.strip():
-                    return build_result(
-                        "completed",
-                        response.text,
-                        "model_finished"
-                    )
+                    try:
+                        return await finalize_structured(
+                            completion_reason="model_finished"
+                        )
+                    except asyncio.TimeoutError:
+                        return build_result(
+                            "timedout",
+                            "Structured RCA finalization exceeded execution deadline.",
+                            "execution_timedout",
+                        )
+                    except Exception as exc:
+                        traceback.print_exc()
+                        return build_result(
+                            "finalization_failed",
+                            (
+                                "Structured RCA finalization failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                            "structured_finalization_error",
+                        )
                 return build_result(
                     "empty_response",
-                    "The model returned no answer or tool calls.",
+                    "The model returned no answe or tool calls."
                     "empty_model_response"
                 )
 
@@ -305,43 +425,27 @@ class RCAAgent:
         )
 
         try:
-            final_response = await run_with_deadline(
-                asyncio.to_thread(
-                    self.provider.generate,
-                    messages,
-                    None,
-                    4096
-                )
-            )
-
-            record_usage(final_response)
-
-            if final_response.text.strip():
-                return build_result(
-                    "completed",
-                    final_response.text,
-                    "iteration_limit"
-                )
-            return build_result(
-                "finalization failed",
-                "Finalization returned no report.",
-                "empty_final_response"
+            return await finalize_structured(
+                completion_reason="iteration_limit"
             )
         except asyncio.TimeoutError:
             return build_result(
                 "timedout",
-                "Finalization exceeded execution deadline.",
+                "Structured RCA finalization exceeded execution deadline.",
                 "execution_timedout"
             )
         except Exception as exc:
+            traceback.print_exc()
+
             return build_result(
                 "finalization_failed",
                 (
-                    "Finalization failed: "
+                    "Structured RCA finalization failed: "
                     f"{type(exc).__name__}: {exc}"
                 ),
-                "provider_error"
+                "structured_finalization_error",
             )
+
     
         
 
