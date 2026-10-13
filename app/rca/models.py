@@ -35,6 +35,7 @@ class Evidence(BaseModel):
     tool_arguments: dict[str, Any] = Field(default_factory=dict)
     summary: str = Field(min_length=1)
     raw_reference: str | None = Field(default=None, description="Reference to stored raw record")
+    severity: str | None = None
 
 class Observation(BaseModel):
     model_config = ConfigDict(extra="forbid")

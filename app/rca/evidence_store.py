@@ -56,6 +56,11 @@ class EvidenceStore:
             tool_arguments=tool_arguments,
             summary=log.get("message",""),
             raw_reference=None,
+            severity=(
+                str(log["severity"]).upper()
+                if log.get("severity") is not None 
+                else None 
+            )
         )
 
         self._evidence[evidence_id] = evidence
