@@ -43,6 +43,16 @@ async def main():
     print("\nRCA Report:")
     print(result["answer"])
 
+    print("\n===== EVIDENCE SUMMARY =====")
+    print("Evidence count:", result["evidence_count"])
+
+    for evidence in result["evidence"][:10]:
+        print(
+            evidence["evidence_id"],
+            evidence["source"],
+            evidence["summary"][:120],
+        )
+
 
 if __name__ == "__main__":
     asyncio.run(main())

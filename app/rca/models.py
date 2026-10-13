@@ -1,0 +1,76 @@
+"""
+provider-neutral, typed RCA report schema.
+This defines the contract, can modify RCAAgent or validate evidence IDs.
+"""
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+from pydantic import BaseModel, Field, ConfigDict
+
+class EvidenceType(str, Enum):
+    LOG = "log"
+    METRIC = "metric"
+    TRACE = "trace"
+    OTHER = "other"
+
+class Confidence(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+class InvestigationStatus(str, Enum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+class Evidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: str = Field(min_length=1, description="Stable ID assigned by te evidence store")
+    evidence_type: EvidenceType
+    source: str = Field(min_length=1, description="Service or telemetry source")
+    observed_at: datetime | None = None
+    collected_at: datetime
+    tool_name: str = Field(min_length=1)
+    tool_arguments: dict[str, Any] = Field(default_factory=dict)
+    summary: str = Field(min_length=1)
+    raw_reference: str | None = Field(default=None, description="Reference to stored raw record")
+
+class Observation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    observation_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+class Hypothesis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hypothesis_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    confidence: Confidence
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    validation_steps: list[str] = Field(default_factory=list)
+
+class Finding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    finding_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    confidence: Confidence
+
+class RCAReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    incident_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    status: InvestigationStatus
+    completion_reason: str
+    started_at: datetime
+    finished_at: datetime
+    services_investigated: list[str] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    confirmed_findings: list[Finding] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    recommended_next_steps: list[str] = Field(default_factory=list)
+    
