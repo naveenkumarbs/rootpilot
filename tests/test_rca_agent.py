@@ -6,18 +6,11 @@ from app.agents.rca_agent import RCAAgent
 async def main():
     agent = RCAAgent()
     result = await agent.investigate(
-        """
-        Investigate recent checkout errors and timeouts.
-
-        The service identifier in OpenSearch is exactly 'checkout'.
-
-        Start by retrieving ERROR and WARN logs for checkout.
-        Investigate downstream dependencies when evidence suggests they may be involved.
-
-        Do not repeat identical searches.
-
-        Produce an RCA report based only on retrieved evidence.
-        """
+        "Investigate the checkout service timeout that occurred on "
+        "2026-10-13 at approximately 14:01:18 UTC. "
+        "Checkout failed while calling the email service. "
+        "Correlate checkout and email service logs around the incident "
+        "timestamp and identify the most likely root cause."
     )
 
     print("\n===== EVIDENCE VALIDATION =====")
