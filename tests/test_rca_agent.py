@@ -16,15 +16,47 @@ async def main():
     print("\n===== EVIDENCE VALIDATION =====")
 
     validation = result.get("validation")
+    print(json.dumps(validation, indent=2))
+    
+    print("\n===== GROUNDING AUDIT =====")
+    audit = result.get("grounding_audit", {})
+    print(json.dumps(audit,indent=2, default=str))
 
     assert validation is not None, (
         "RCAAgent did not return validation metadata."
     )
-
-    print(json.dumps(validation, indent=2))
-
+    
     assert validation["is_valid"] is True
     assert validation["errors"] == []
+
+    assert "grounding_audit" in result
+    assert audit["status"] in {
+        "completed",
+        "partial",
+    }
+
+    assert audit["deterministic"] is not None
+    semantic_status = audit["semantic"]["status"]
+
+    assert semantic_status in {
+        "completed",
+        "not_applicable",
+        "timedout",
+        "failed",
+    }
+
+    if semantic_status == "completed":
+        expected_finding_ids = {
+            finding["finding_id"] for finding in result["rca_report"]["confirmed_findings"]
+        }
+
+        actual_finding_ids = {
+            item["finding_id"] for item in audit["semantic"]["evaluations"]
+        }
+
+        assert actual_finding_ids == expected_finding_ids
+
+    print("PASS: Grounding audit attached to RCA result")
 
     if result.get("rca_report"):
         print("\n===== STRUCTURED RCA REPORT =====")

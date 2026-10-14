@@ -16,6 +16,8 @@ from app.rca.validator import EvidenceValidator
 from app.rca.models import InvestigationStatus
 from app.rca.evidence_compressor import EvidenceCompressor
 from app.tools.query_coverage import CachedLogQuery, QueryCoverage
+from app.rca.grounding_validator import GroundingValidator
+from app.rca.semantic_grounding import SemanticGroundingEvaluator
 
 class RCAAgent:
     def __init__(self):
@@ -159,6 +161,92 @@ class RCAAgent:
             total_output_tokens += response.output_tokens or 0
             total_reasoning_tokens += response.reasoning_tokens or 0
 
+        async def run_grounding_audit(analysis):
+            audit = {
+                "status": "not_started",
+                "deterministic": None,
+                "semantic": {
+                    "status": "not_started",
+                    "evaluations": [],
+                },
+            }
+
+            # Deterministic grounding validation
+            deterministic = GroundingValidator().validate(
+                analysis=analysis,
+                evidence_store=evidence_store,
+            )
+
+            audit["deterministic"] = {
+                "is_valid": deterministic.is_valid,
+                "checked_findings": deterministic.checked_findings,
+                "issues": [
+                    {
+                        "finding_id": issue.finding_id,
+                        "issue_type": issue.issue_type,
+                        "severity": issue.severity,
+                        "message": issue.message,
+                        "evidence_ids": issue.evidence_ids,
+                    } for issue in deterministic.issues
+                ],
+            }
+
+            # No confirmed findings: no semantic evaluation needed.
+            if not analysis.confirmed_findings:
+                audit["status"] = "completed"
+                audit["semantic"] = {
+                    "status": "not_applicable",
+                    "evaluations": [],
+                }
+                return audit
+
+            # Semantic grounding evaluation
+            try:
+                evaluator = SemanticGroundingEvaluator(provider=self.provider)
+                evaluation, response = await run_with_deadline(
+                    evaluator.evaluate(
+                        analysis=analysis,
+                        evidence_store=evidence_store,
+                    )
+                )
+
+                # Include evaluation tokens in investigation tokens.
+                record_usage(response)
+
+                audit["semantic"] = {
+                    "status": "completed",
+                    "evaluations": evaluation.model_dump(mode="json")["evaluations"],
+                }
+
+                audit["status"] = "completed"
+            
+            except asyncio.TimeoutError:
+                audit["status"] = "partial"
+                audit["semantic"] = {
+                    "status": "timeout",
+                    "evaluations": [],
+                    "error": (
+                        "Semantic grouding evaluation exceeded "
+                        "the remaining investigation deadline."
+                    ),
+                }
+
+            except Exception as exc:
+                audit["status"] = "partial",
+                audit["semantic"] = {
+                    "status": "failed",
+                    "evaluations": [],
+                    "error": (
+                        "Semantic grounding evaluation failed: "
+                        f"{type(exc).__name__}"
+                    ),
+                }     
+
+                print(
+                    "[Grounding audit] Semantic evaluation failed: ", repr(exc)
+                )   
+            return audit
+
         async def finalize_structured(completion_reason: str):
             evidence_records = EvidenceCompressor().compress(
                 evidence_store.list_all()
@@ -236,6 +324,14 @@ class RCAAgent:
                     "evidence_validation_failed"
                 )
 
+            # Evaluate whether confirmed findings are grounded
+            # in their cited evidence.
+            grounding_audit = await run_grounding_audit(analysis=analysis)
+
+            print("\n===== GROUNDING AUDIT =====")
+            print(json.dumps(grounding_audit, indent=2, default=str))
+
+
             # Determine investigation status
             investigation_status = (
                 InvestigationStatus.PARTIAL
@@ -266,6 +362,9 @@ class RCAAgent:
                 "errors": validation.errors,
                 "warnings": validation.warnings
             }
+
+            result["grounding_audit"] = grounding_audit
+            
 
             return result
 
