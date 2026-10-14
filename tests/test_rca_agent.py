@@ -152,7 +152,21 @@ async def main():
             evidence["source"],
             evidence["summary"][:120],
         )
+    
+    report = result["rca_report"]
+    if report["completion_reason"] == "investigation_saturated":
+        assert report["status"] == "partial"
+        print("PASS: Saturation does not imply completed RCA")
 
+    elif report["completion_reason"] == "iteration_limit":
+        assert report["status"] == "partial"
+        print("PASS: Iteration limit produces partial RCA")
+
+    else:
+        print(
+            "INFO: Investigation completed with reason:",
+            report["completion_reason"]
+        )
 
 if __name__ == "__main__":
     asyncio.run(main())

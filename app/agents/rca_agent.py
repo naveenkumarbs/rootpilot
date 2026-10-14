@@ -20,6 +20,11 @@ from app.rca.grounding_validator import GroundingValidator
 from app.rca.semantic_grounding import SemanticGroundingEvaluator
 from app.rca.quality_scorer import RCAQualityScorer
 from app.rca.grounding_enforcer import GroundingEnforcer
+from app.agents.investigation_progress import (
+    InvestigationProgress,
+    InvestigationProgressEvaluator,
+)
+
 
 class RCAAgent:
     def __init__(self):
@@ -393,11 +398,16 @@ class RCAAgent:
                 )
 
             print(json.dumps(enforcement_result.model_dump(mode="json"), indent=2))
-            
+
+            partial_completion_reasons = {
+                "iteration_limit", 
+                "investigation_saturated"
+            }
+
             # Determine investigation status
             investigation_status = (
                 InvestigationStatus.PARTIAL
-                if completion_reason == "iteration_limit"
+                if completion_reason in partial_completion_reasons
                 else InvestigationStatus.COMPLETED
             )
 
@@ -461,8 +471,10 @@ class RCAAgent:
             
             return result
 
+        progress_evaluator = InvestigationProgressEvaluator()
 
         for iteration in range(1, self.max_iterations + 1):
+            evidence_count_before_iteration = evidence_store.count()
             iterations = iteration
             print(f"\n===== Agent Iteration {iteration} =====")
 
@@ -706,6 +718,71 @@ class RCAAgent:
                     tool_results=tool_results
                 )
             )
+
+            evidence_count_after_iteration = evidence_store.count()
+
+            new_evidence = (evidence_count_after_iteration - evidence_count_before_iteration)
+            all_evidence = evidence_store.list_all()
+            services_with_evidence = frozenset(
+                evidence.source
+                for evidence in all_evidence
+                if evidence.source 
+            )
+
+            has_warning_or_error = any(
+                (evidence.severity or "").upper() in {"WARN", "WARNING", "ERROR", "FATAL", "CRITICAL"}
+                for evidence in all_evidence
+            )
+
+            progress = InvestigationProgress(
+                iteration=iteration,
+                total_evidence=evidence_count_after_iteration,
+                new_evidence=new_evidence,
+                services_with_evidence=services_with_evidence,
+                has_warning_or_error=has_warning_or_error,
+            )
+
+            stopping_decision = progress_evaluator.evaluate(progress)
+
+            print(
+                f"[Investigation Progress] "
+                f"iteration={iteration}, "
+                f"total_evidence={progress.total_evidence}, "
+                f"new_evidence={progress.new_evidence}, "
+                f"services={len(progress.services_with_evidence)}, "
+                f"warning_or_error={progress.has_warning_or_error}, "
+                f"stop={stopping_decision.should_stop}"
+            )
+
+            if stopping_decision.should_stop:
+                print(
+                    "[Investigation Stopping] "
+                    f"{stopping_decision.explanation}"
+                )
+
+                try:
+                    return await finalize_structured(
+                        completion_reason="investigation_saturated"
+                    )
+
+                except asyncio.TimeoutError:
+                    return build_result(
+                        "timedout",
+                        "Structured RCA finalization exceeded execution deadline.",
+                        "execution_timedout",
+                    )
+
+                except Exception as exc:
+                    traceback.print_exc()
+
+                    return build_result(
+                        "finalization_failed",
+                        (
+                            "Structured RCA finalization failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        "structured_finalization_error",
+                    )
 
         messages.append(
             LLMMessage(
