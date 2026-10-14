@@ -19,6 +19,7 @@ from app.tools.query_coverage import CachedLogQuery, QueryCoverage
 from app.rca.grounding_validator import GroundingValidator
 from app.rca.semantic_grounding import SemanticGroundingEvaluator
 from app.rca.quality_scorer import RCAQualityScorer
+from app.rca.grounding_enforcer import GroundingEnforcer
 
 class RCAAgent:
     def __init__(self):
@@ -227,13 +228,13 @@ class RCAAgent:
                     "status": "timeout",
                     "evaluations": [],
                     "error": (
-                        "Semantic grouding evaluation exceeded "
+                        "Semantic grounding evaluation exceeded "
                         "the remaining investigation deadline."
                     ),
                 }
 
             except Exception as exc:
-                audit["status"] = "partial",
+                audit["status"] = "partial"
                 audit["semantic"] = {
                     "status": "failed",
                     "evaluations": [],
@@ -346,6 +347,52 @@ class RCAAgent:
             )
 
             print(json.dumps(quality_assessment.model_dump(mode="json"),indent=2))
+
+            print("\n===== GROUNDING ENFORCEMENT =====")
+            enforcement_result = GroundingEnforcer().enforce(
+                analysis=analysis,
+                grounding_audit=grounding_audit,
+                evidence_validation={
+                    "is_valid": validation.is_valid,
+                    "errors": validation.errors,
+                    "warnings": validation.warnings,
+                },
+            )
+
+            # Verify enforcement accounting.
+            assert (
+                enforcement_result.original_finding_count
+                ==
+                enforcement_result.confirmed_count
+                + enforcement_result.provisional_count
+                + enforcement_result.rejected_count
+            ), "Grounding enforcement finding counts do not match."
+
+            original_ids = [
+                finding.finding_id
+                for finding in analysis.confirmed_findings
+            ]
+
+            enforced_ids = [
+                finding.finding_id
+                for finding in (
+                    enforcement_result.confirmed_findings
+                    + enforcement_result.provisional_findings
+                    + enforcement_result.rejected_findings
+                )
+            ]
+
+            if (
+                len(original_ids) != len(set(original_ids))
+                or len(enforced_ids) != len(set(enforced_ids))
+                or set(original_ids) != set(enforced_ids)
+            ):
+                raise ValueError(
+                    "Grounding enforcement produced missing, "
+                    "duplicate, or unexpected finding IDs."
+                )
+
+            print(json.dumps(enforcement_result.model_dump(mode="json"), indent=2))
             
             # Determine investigation status
             investigation_status = (
@@ -370,7 +417,35 @@ class RCAAgent:
                 completion_reason=completion_reason,
             )
 
-            result["rca_report"] = report.model_dump(mode="json")
+            # Preserve the original LLM generated RCA report.
+            original_report = report.model_dump(mode="json")
+
+            # create a separate enforced report
+            enforced_report = dict(original_report)
+
+            # only findings approved by the enforcement policy remain in confirmed_findings
+            enforced_report["confirmed_findings"] = [
+                finding.model_dump(mode="json")
+                for finding in enforcement_result.confirmed_findings
+            ]
+
+            # Findings require additional investigation.
+            enforced_report["provisional_findings"] = [
+                finding.model_dump(mode="json")
+                for finding in enforcement_result.provisional_findings 
+            ]
+
+            # Finding that failed grounding requirements.
+            enforced_report["rejected_findings"] = [
+                finding.model_dump(mode="json")
+                for finding in enforcement_result.rejected_findings
+            ]
+
+            # Publish the enforced report
+            result["rca_report"] = enforced_report
+
+            # Retain the original for internal auditing.
+            result["original_rca_report"] = original_report
 
             result["validation"] = {
                 "is_valid": validation.is_valid,
@@ -379,8 +454,11 @@ class RCAAgent:
             }
 
             result["grounding_audit"] = grounding_audit
-            
 
+            result["quality_assessment"] = quality_assessment.model_dump(mode="json")
+
+            result["grounding_enforcement"] = enforcement_result.model_dump(mode="json")
+            
             return result
 
 
@@ -460,7 +538,7 @@ class RCAAgent:
                         )
                 return build_result(
                     "empty_response",
-                    "The model returned no answe or tool calls."
+                    "The model returned no answe or tool calls.",
                     "empty_model_response"
                 )
 
