@@ -15,6 +15,7 @@ from app.rca.parser import build_rca_report
 from app.rca.validator import EvidenceValidator
 from app.rca.models import InvestigationStatus
 from app.rca.evidence_compressor import EvidenceCompressor
+from app.tools.query_coverage import CachedLogQuery, QueryCoverage
 
 class RCAAgent:
     def __init__(self):
@@ -103,6 +104,9 @@ class RCAAgent:
 
         tool_history = []
         tool_cache = {}
+
+        # Tracks complete absolute-time OpenSearch query results.
+        log_query_cache: list[CachedLogQuery] = []
 
         # Each investigation maintains its own evidence collection
         evidence_store = EvidenceStore()
@@ -377,20 +381,46 @@ class RCAAgent:
                         tool_result = tool_cache[cache_key]
                         tool_status = "cached"
                     else:
-                        tool_result = await run_with_deadline(
-                            execute_tool(tool_name, arguments)
-                        )
-                        tool_result = json.loads(
-                            json.dumps(tool_result, default=str)
-                        )
+                        covered_result = None
 
-                        print("\n===== TOOL RESULT DEBUG =====")
-                        print("Tool:", tool_name)
-                        print("Result:", json.dumps(tool_result, indent=2, default=str)[:3000])
-                        print("===============================")
+                        # Attempt conservative query coverage reuse.
+                        if tool_name == "search_service_logs":
+                            for cached_query in log_query_cache:
+                                if QueryCoverage.can_reuse(cached_query, arguments):
+                                    try:
+                                        covered_result = QueryCoverage.filter_results(cached_query, arguments)
+                                        break
+                                    except (ValueError, TypeError):
+                                        # Fall back to OpenSearch if local filtering cannot safely reproduce the query
+                                        covered_result = None
+                        if covered_result is not None:
+                            tool_result = covered_result
+                            tool_status = "coverage_cached"
+                            print("[Query Coverage] Reused previous OpenSearch results")
+                        else:
+                            tool_result = await run_with_deadline(
+                                execute_tool(tool_name, arguments)
+                            )
+                            tool_result = json.loads(
+                                json.dumps(tool_result, default=str)
+                            )
+                            tool_status = "success"
 
+                            # Register only demonstrably complete results.
+                            if (tool_name == "search_service_logs" and isinstance(tool_result, list)):
+                                query_limit = int(arguments.get("limit", 20))
+                                is_complete = len(tool_result) < query_limit
+                                if is_complete:
+                                    log_query_cache.append(
+                                        CachedLogQuery(
+                                            arguments=dict(arguments),
+                                            results=tool_result,
+                                            complete=True,
+                                        )
+                                    )
+
+                        # Cache te result under the exact requested arguments.
                         tool_cache[cache_key] = tool_result
-                        tool_status = "success"
                     
                     is_error = False
 
