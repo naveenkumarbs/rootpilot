@@ -18,6 +18,7 @@ from app.rca.evidence_compressor import EvidenceCompressor
 from app.tools.query_coverage import CachedLogQuery, QueryCoverage
 from app.rca.grounding_validator import GroundingValidator
 from app.rca.semantic_grounding import SemanticGroundingEvaluator
+from app.rca.quality_scorer import RCAQualityScorer
 
 class RCAAgent:
     def __init__(self):
@@ -326,12 +327,26 @@ class RCAAgent:
 
             # Evaluate whether confirmed findings are grounded
             # in their cited evidence.
-            grounding_audit = await run_grounding_audit(analysis=analysis)
-
-            print("\n===== GROUNDING AUDIT =====")
+            print("\n===== GROUNDING AUDIT =====") 
+            grounding_audit = await run_grounding_audit(analysis=analysis) 
             print(json.dumps(grounding_audit, indent=2, default=str))
 
+            print("\n===== RCA QUALITY ASSESSMENT =====")
+            quality_assessment = RCAQualityScorer().score(
+                grounding_audit=grounding_audit,
+                evidence_validation={
+                    "is_valid": validation.is_valid,
+                    "errors": validation.errors,
+                    "warnings": validation.warnings,
+                },
+                confirmed_finding_ids=[
+                    finding.finding_id 
+                    for finding in analysis.confirmed_findings
+                ],
+            )
 
+            print(json.dumps(quality_assessment.model_dump(mode="json"),indent=2))
+            
             # Determine investigation status
             investigation_status = (
                 InvestigationStatus.PARTIAL
