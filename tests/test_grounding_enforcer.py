@@ -85,7 +85,7 @@ def test_supported_and_partial():
         grounding_audit=make_audit(),
         evidence_validation=valid_evidence(),
     )
-
+    
     assert result.confirmed_count == 1
     assert result.provisional_count == 1
     assert result.rejected_count == 0
@@ -190,6 +190,152 @@ def test_invalid_evidence():
 
     print("PASS: Invalid evidence rejected")
 
+def test_missing_deterministic_evaluation():
+
+    audit = make_audit(
+        first="supported",
+        second="supported",
+    )
+
+    audit["deterministic"] = None
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Missing deterministic evaluation fails closed")
+
+def test_duplicate_semantic_evaluations():
+
+    audit = make_audit()
+
+    audit["semantic"]["evaluations"].append(
+        {
+            "finding_id": "FND-001",
+            "classification": "supported",
+        }
+    )
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Duplicate semantic evaluations rejected")
+
+def test_missing_finding_evaluation():
+
+    audit = make_audit()
+
+    audit["semantic"]["evaluations"] = [
+        {
+            "finding_id": "FND-001",
+            "classification": "supported",
+        }
+    ]
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Incomplete semantic evaluation fails closed")
+
+def test_unknown_classification():
+
+    audit = make_audit()
+
+    audit["semantic"]["evaluations"][0][
+        "classification"
+    ] = "definitely_correct"
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Unknown semantic classification rejected")
+
+def test_unknown_deterministic_severity():
+
+    audit = make_audit(
+        first="supported",
+        second="supported",
+    )
+
+    audit["deterministic"]["issues"] = [
+        {
+            "finding_id": "FND-001",
+            "issue_type": "unsupported_causality",
+            "severity": "critical",
+        }
+    ]
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Unknown deterministic severity fails closed")
+
+def test_unknown_finding_reference():
+
+    audit = make_audit()
+
+    audit["semantic"]["evaluations"][0][
+        "finding_id"
+    ] = "FND-999"
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 0
+    assert result.provisional_count == 2
+
+    print("PASS: Unknown finding reference rejected")
+
+def test_all_checks_successful():
+
+    audit = make_audit(
+        first="supported",
+        second="supported",
+    )
+
+    result = GroundingEnforcer().enforce(
+        analysis=make_analysis(),
+        grounding_audit=audit,
+        evidence_validation=valid_evidence(),
+    )
+
+    assert result.confirmed_count == 2
+    assert result.provisional_count == 0
+    assert result.rejected_count == 0
+
+    print("PASS: Valid findings remain confirmed")
 
 def main():
 
@@ -199,7 +345,14 @@ def main():
     test_blocking_error()
     test_semantic_unavailable()
     test_invalid_evidence()
-
+    test_missing_deterministic_evaluation()
+    test_duplicate_semantic_evaluations()
+    test_missing_finding_evaluation()
+    test_unknown_classification()
+    test_unknown_deterministic_severity()
+    test_unknown_finding_reference()
+    test_all_checks_successful()
+    
     print("\nAll grounding enforcement tests passed.")
 
 

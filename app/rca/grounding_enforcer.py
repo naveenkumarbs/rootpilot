@@ -34,90 +34,241 @@ class GroundingEnforcementResult(BaseModel):
 class GroundingEnforcer:
     BLOCKING_SEVERITIES = {"error"}
 
+    ALLOWED_CLASSIFICATIONS = {
+        "supported",
+        "partially_supported",
+        "unsupported",
+        "insufficient_evidence",
+    }
+
+    ALLOWED_SEVERITIES = {
+        "warning",
+        "error",
+    }
+
+    @staticmethod
+    def _valid_semantic_evaluations(
+        semantic: dict,
+        expected_finding_ids: set[str],
+    ) -> bool:
+        if semantic.get("status") != "completed":
+            return False
+
+        evaluations = semantic.get("evaluations")
+
+        if not isinstance(evaluations, list):
+            return False 
+
+        evaluated_ids = []
+        for evaluation in evaluations:
+            if not isinstance(evaluation, dict):
+                return False 
+            finding_id = evaluation.get("finding_id")
+            classification = evaluation.get("classification")
+
+            if not isinstance(finding_id, str):
+                return False
+            if classification not in GroundingEnforcer.ALLOWED_CLASSIFICATIONS:
+                return False 
+            evaluated_ids.append(finding_id)
+
+        if len(evaluated_ids) != len(set(evaluated_ids)):
+            return False 
+
+        return set(evaluated_ids) == expected_finding_ids
+
+    @staticmethod
+    def _valid_deterministic_evaluation(
+        deterministic: dict,
+        expected_finding_ids: set[str],
+    ) -> bool:
+        if not isinstance(deterministic, dict):
+            return False 
+        if not isinstance(deterministic.get("is_valid"), bool):
+            return False 
+        
+        issues = deterministic.get("issues")
+        if not isinstance(issues, list):
+            return False 
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                return False 
+            finding_id = issue.get("finding_id")
+            severity = issue.get("severity")
+
+            if finding_id not in expected_finding_ids:
+                return False
+            if severity not in GroundingEnforcer.ALLOWED_SEVERITIES:
+                return False 
+        return True 
+            
     def enforce(
-            self,
-            analysis: RCAAnalysis,
-            grounding_audit: dict[str, Any],
-            evidence_validation: dict[str, Any],
+        self,
+        analysis: RCAAnalysis,
+        grounding_audit: dict[str, Any],
+        evidence_validation: dict[str, Any],
     ) -> GroundingEnforcementResult:
 
         findings = analysis.confirmed_findings
-        semantic = grounding_audit.get("semantic", {})
-        deterministic = grounding_audit.get("deterministic", {})
-        semantic_status = semantic.get("status")
 
-        semantic_evaluations = {
-            item["finding_id"]: item
-            for item in semantic.get("evaluations", [])
-            if isinstance(item, dict)
-            and "finding_id" in item
+        expected_ids = {
+            finding.finding_id
+            for finding in findings
         }
 
-        issues_by_finding: dict[str, list[dict]] = {} 
+        semantic = grounding_audit.get("semantic")
+        deterministic = grounding_audit.get("deterministic")
 
-        for issue in deterministic.get("issues", []):
-            finding_id = issue.get("finding_id")
-            issues_by_finding.setdefault(finding_id, []).append(issue)
+        semantic_valid = (
+            isinstance(semantic, dict)
+            and self._valid_semantic_evaluations(
+                semantic,
+                expected_ids,
+            )
+        )
+
+        deterministic_valid = (
+            isinstance(deterministic, dict)
+            and self._valid_deterministic_evaluation(
+                deterministic,
+                expected_ids,
+            )
+        )
+
+        evidence_valid = (
+            evidence_validation.get("is_valid") is True
+        )
+
+        semantic_evaluations = {}
+
+        if semantic_valid:
+            semantic_evaluations = {
+                item["finding_id"]: item
+                for item in semantic["evaluations"]
+            }
+
+        issues_by_finding = {}
+
+        if deterministic_valid:
+            for issue in deterministic["issues"]:
+                issues_by_finding.setdefault(
+                    issue["finding_id"], []
+                ).append(issue)
 
         confirmed = []
         provisional = []
         rejected = []
         decisions = []
 
-        evidence_valid = (evidence_validation.get("is_valid") is True)
-
         for finding in findings:
-            finding_id = finding.finding_id
-            evaluation = semantic_evaluations.get(finding_id, {})
-            classification = evaluation.get("classification")
-            finding_issues = issues_by_finding.get(finding_id, [])
-            issue_types = [issue.get("issue_type", "unknown") for issue in finding_issues]
 
-            has_blocking_issue = any(
-                issue.get("severity") in self.BLOCKING_SEVERITIES 
+            finding_id = finding.finding_id
+
+            evaluation = semantic_evaluations.get(
+                finding_id, {}
+            )
+
+            classification = evaluation.get(
+                "classification"
+            )
+
+            finding_issues = issues_by_finding.get(
+                finding_id, []
+            )
+
+            has_error = any(
+                issue["severity"] == "error"
                 for issue in finding_issues
             )
 
             has_warning = any(
-                issue.get("severity") == "warning" for issue in finding_issues
+                issue["severity"] == "warning"
+                for issue in finding_issues
             )
 
             reasons = []
 
-            # Highest priority: invalid evidence references.
-            if not evidence_valid: 
-                decision = EnforcementDecision.REJECTED
-                reasons.append("Evidence reference validation falied.")
+            if not evidence_valid:
 
-            # deterministic blocking violations
-            elif has_blocking_issue:
                 decision = EnforcementDecision.REJECTED
-                reasons.append("Deterministic grounding validtion detected a blocking issue.")
 
-            # Unsupported findings must never be confirmed
-            elif (semantic_status == "completed" and classification == "unsupported"):
-                decision = EnforcementDecision.REJECTED
-                reasons.append("Semantic evaluator classified the finding as unsupported.")
+                reasons.append(
+                    "Evidence validation failed."
+                )
 
-            # Partial evidence or missing evidence
-            elif (semantic_status=="completed" and classification in {"partially_supported", "insufficient_evidence"}):
+            elif not semantic_valid:
+
                 decision = EnforcementDecision.PROVISIONAL
-                reasons.append(f"Semantic grounding classification: {classification}.")
 
-            # Supported finding with deterministic warning
-            elif(semantic_status=="completed" and classification=="supported" and has_warning):
+                reasons.append(
+                    "Semantic grounding evaluation is "
+                    "missing, incomplete, or invalid."
+                )
+
+            elif not deterministic_valid:
+
                 decision = EnforcementDecision.PROVISIONAL
-                reasons.append("Deterministic grounding warning requires further review.")
 
-            # Fully supported
-            elif (semantic_status=="completed" and classification=="supported"):
+                reasons.append(
+                    "Deterministic grounding evaluation is "
+                    "missing or invalid."
+                )
+
+            elif has_error:
+
+                decision = EnforcementDecision.REJECTED
+
+                reasons.append(
+                    "Deterministic grounding detected "
+                    "a blocking issue."
+                )
+
+            elif classification == "unsupported":
+
+                decision = EnforcementDecision.REJECTED
+
+                reasons.append(
+                    "Semantic grounding classified "
+                    "the finding as unsupported."
+                )
+
+            elif classification in {
+                "partially_supported",
+                "insufficient_evidence",
+            }:
+
+                decision = EnforcementDecision.PROVISIONAL
+
+                reasons.append(
+                    f"Semantic grounding classification: "
+                    f"{classification}."
+                )
+
+            elif has_warning:
+
+                decision = EnforcementDecision.PROVISIONAL
+
+                reasons.append(
+                    "Deterministic grounding warning "
+                    "requires further investigation."
+                )
+
+            elif classification == "supported":
+
                 decision = EnforcementDecision.CONFIRMED
-                reasons.append("Finding passed semantic and deterministic grounding checks.")
 
-            # Semantic evaluation unavailable or incomplete.
+                reasons.append(
+                    "Finding passed all grounding checks."
+                )
+
             else:
+
                 decision = EnforcementDecision.PROVISIONAL
-                reasons.append("Semantic grounding evaluation is unavailable or incomplete")
+
+                reasons.append(
+                    "Finding could not be safely classified."
+                )
 
             decisions.append(
                 FindingEnforcementResult(
@@ -126,14 +277,19 @@ class GroundingEnforcer:
                     original_statement=finding.statement,
                     reasons=reasons,
                     semantic_classification=classification,
-                    deterministic_issues=issue_types,
+                    deterministic_issues=[
+                        issue.get("issue_type", "unknown")
+                        for issue in finding_issues
+                    ],
                 )
             )
 
             if decision == EnforcementDecision.CONFIRMED:
                 confirmed.append(finding)
+
             elif decision == EnforcementDecision.PROVISIONAL:
                 provisional.append(finding)
+
             else:
                 rejected.append(finding)
 
