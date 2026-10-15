@@ -69,6 +69,7 @@ async def run_approval_scenario(approved):
     graph = build_rootpilot_pipeline(
         rca_agent=rca,
         remediation_agent=planner,
+        allowed_services={"email", "checkout"}
     )
 
     config = {

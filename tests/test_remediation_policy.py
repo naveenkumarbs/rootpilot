@@ -17,7 +17,14 @@ def main():
         ],
     )
 
-    decision = RemediationPolicy().validate(plan)
+    decision = RemediationPolicy().validate(
+        plan,
+        valid_evidence_ids=["EV-0001"],
+        allowed_services={"email", "checkout"}
+    )
+
+    print("Policy allowed:", decision.allowed)
+    print("Policy reason:", decision.reason)
 
     assert decision.allowed is True
 

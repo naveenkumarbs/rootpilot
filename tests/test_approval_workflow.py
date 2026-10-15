@@ -28,7 +28,11 @@ def run_scenario(graph, approved: bool):
     }
 
     result = graph.invoke(
-        {"remediation_plan": PLAN},
+        {
+            "remediation_plan": PLAN,
+            "valid_evidence_ids": ["EV-0001"],
+            "allowed_services": ["email", "checkout"],
+        },
         config=config,
     )
 
@@ -63,7 +67,9 @@ def test_policy_rejection(graph):
             "remediation_plan": {
                 "incident_summary": "No actions",
                 "actions": [],
-            }
+            },
+            "valid_evidence_ids": ["EV-0001"],
+            "allowed_services": ["email", "checkout"],
         },
         config=config,
     )

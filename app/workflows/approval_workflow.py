@@ -13,10 +13,16 @@ class ApprovalState(TypedDict, total=False):
     policy_reason: str 
     approved: bool 
     execution_status: str 
+    valid_evidence_ids: list[str]
+    allowed_services: list[str]
 
 def validate_policy(state: ApprovalState) -> dict:
     plan=RemediationPlan.model_validate(state["remediation_plan"])
-    decision = RemediationPolicy().validate(plan)
+    decision = RemediationPolicy().validate(
+        plan=plan,
+        valid_evidence_ids=set(state.get("valid_evidence_ids", [])),
+        allowed_services=set(state.get("allowed_services", [])),
+    )
 
     print("[LangGraph] Policy: ", decision.reason) 
 
