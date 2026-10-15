@@ -707,11 +707,9 @@ The structure above is a functional overview, not an exhaustive file inventory.
 ### Step 1: Clone the Repository
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone https://github.com/naveenkumarbs/rootpilot
 cd rootpilot
 ```
-
-Replace `<YOUR_REPOSITORY_URL>` with the actual repository URL.
 
 ### Step 2: Create a Virtual Environment
 
@@ -736,7 +734,7 @@ Example:
 
 ```dotenv
 GOOGLE_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 The implementation also supports Gemini credential configuration through `GEMINI_API_KEY` where applicable.
