@@ -13,9 +13,8 @@ class RemediationAction(BaseModel):
     target_service:str 
     rationale: str 
     risk_level: Literal["low", "medium", "high"]
-    suporting_evidenc_ids: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 class RemediationPlan(BaseModel):
     incident_summary: str 
     actions: list[RemediationAction] = Field(default_factory=list)
-    
